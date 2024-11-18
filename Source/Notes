@@ -1,0 +1,9 @@
+Download library-for-console files, into <whatever>/Lib
+
+Download the chess-for-console files into <whatever>/Chess
+
+Compile in the Chess directory using the following: (For Windows, add -D_Windows)
+----------
+gcc chess-con.c -ffunction-sections -Os -c -o chess-con.o -Wunused -Wno-unused-result 2> chess-con.err
+gcc chess-con.o -Wl,--gc-sections -lm -lc -s -o chess-con
+----------
