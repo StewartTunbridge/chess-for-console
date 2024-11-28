@@ -4,6 +4,7 @@
 //
 // Author: Stewart Tunbridge, Pi Micros
 // Email:  stewarttunbridge@gmail.com
+// Copyright (c) 2024 Stewart Tunbridge, Pi Micros
 //
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -29,8 +30,8 @@ bool SimpleAnalysis = false;
 #define PieceWhite(p)  ((p&pWhite)!=0)
 
 bool PlayerWhite;
-bool GameOver;
-int DepthPlay = 2;
+//bool GameOver;
+int DepthPlay = 3;
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -318,7 +319,7 @@ void UnmovePiece (_Coord From, _Coord To, _Piece OldTo, _SpecialMove SpecialMove
 
 longint MovesConsidered;
 _Coord BestA [DepthMax], BestB [DepthMax];
-_Coord BestA_ [DepthMax], BestB_ [DepthMax];   // copy best move sequence
+//_Coord BestA_ [DepthMax], BestB_ [DepthMax];   // copy best move sequence
 
 int BestMove (bool PlayWhite, int Depth)
   {
@@ -355,11 +356,16 @@ int BestMove (bool PlayWhite, int Depth)
                       BestScore = Score;
                       BestA [Depth] = From;
                       BestB [Depth] = To;
-                      if (Depth == 0)
+                      /*for (Index = Depth; Index < SIZEARRAY (BestA); Index++)
+                        {
+                          BestA_ [Index] = BestA [Index];
+                          BestB_ [Index] = BestB [Index];
+                        }
+                     if (Depth == 0)
                         {
                           memcpy (BestA_, BestA, sizeof (BestA_));
                           memcpy (BestB_, BestB, sizeof (BestB_));
-                        }
+                        }*/
                     }
                   UnmovePiece (From, To, p_, sm);
                 }   // no more moves
