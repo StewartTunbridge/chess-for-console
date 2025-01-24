@@ -30,7 +30,6 @@ bool SimpleAnalysis = false;
 #define PieceWhite(p)  ((p&pWhite)!=0)
 
 bool PlayerWhite;
-//bool GameOver;
 int DepthPlay = 3;
 
 
@@ -88,57 +87,55 @@ _Coord *PieceMoves [] =    {NULL,   PieceMovesKing, PieceMovesAllDir, PieceMoves
 int PawnFirstY [] = {6, 1};
 int FirstY [] = {7, 0};
 
-bool PieceMove (_Coord From, _Coord *To, int *Index)
+void GetPieceMoves (_Coord From, _Coord *Res)   // Res: array of _Coord
   {
+    int Index;
     _Piece FromPce, ToPce;
     _Coord *Moves;
+    _Coord To;
     bool Repeat;
     _Piece pr;
-    bool Bad;
+    bool Bad, PieceTaken;
     //
     FromPce = (_Piece) Board [From.x][From.y];
     Moves = PieceMoves [Piece (FromPce)];
     Repeat = PieceMovesRepeat [Piece (FromPce)];
-    // Are we repeating and have already taken a piece? If so, go to next direction from (x0, y0)
-    if (Repeat)
-      if ((From.x != To->x) || (From.y != To->y))   // we have moved
-        if (Piece (Board [To->x][To->y]) != pEmpty)   // current position is not empty
-          {
-            if (Moves [*Index].x != End)
-              (*Index)++;
-            *To = From;
-          }
-    // Next position
+    Index = 0;
+    To = From;
+    // Build list of all possible legal moves
     while (true)
       {
-        if (Moves [*Index].x == End)
-          return false;
-        if (!Repeat)
-          *To = From;
-        To->x += Moves [*Index].x;
+        if (Moves [Index].x == End)
+          break;
+        //if (!Repeat)
+        //  *To = From;
+        To.x += Moves [Index].x;
         if (PieceWhite (FromPce))   // Black pieces have reverse Y direction (only effects Pawns)
-          To->y += Moves [*Index].y;
+          To.y += Moves [Index].y;
         else
-          To->y -= Moves [*Index].y;
+          To.y -= Moves [Index].y;
         Bad = false;
-        if ((To->x > 7) || (To->x < 0) || (To->y > 7) || (To->y < 0))   // off the board
+        PieceTaken = false;
+        if ((To.x > 7) || (To.x < 0) || (To.y > 7) || (To.y < 0))   // off the board
           Bad = true;
         else
           {
-            ToPce = (_Piece) Board [To->x][To->y];
+            ToPce = (_Piece) Board [To.x][To.y];
             if (Piece (ToPce) != pEmpty)   // destination  NOT empty AND is
               if (PieceWhite (ToPce) == PieceWhite (FromPce))   // my own piece
                 Bad = true;
+              else
+                PieceTaken = true;   // takes oponents piece
             if (Piece (FromPce) == pPawn)   // Pawn has more limitations
-              switch (*Index)
+              switch (Index)
                 {
                   case 0: // straight, double step
                           if (From.y != PawnFirstY [PieceWhite (FromPce)])   // not pawns start row
                             Bad = true;
                           else
-                            if (Piece (Board [From.x][(From.y + To->y) / 2]) != pEmpty)   // also test square being jumped over
+                            if (Piece (Board [From.x][(From.y + To.y) / 2]) != pEmpty)   // also test square being jumped over
                               Bad = true;
-                          // continue into *Index == 1
+                          // continue into Index == 1
                   case 1: // straight, single step OR double step
                           if (Piece (ToPce) != pEmpty)
                             Bad = true;
@@ -149,7 +146,7 @@ bool PieceMove (_Coord From, _Coord *To, int *Index)
                             Bad = true;
                 }
             else if (Piece (FromPce) == pKing)
-              if (*Index < 2)   // Castling
+              if (Index < 2)   // Castling
                 if ((FromPce / pMoves > 0) || (FromPce & pChecked))   // moved
                   Bad = true;
                 else
@@ -157,36 +154,39 @@ bool PieceMove (_Coord From, _Coord *To, int *Index)
                     pr = pRook;
                     if (PieceWhite (FromPce))
                       pr = (_Piece) (pr | pWhite);   // corresponding Rook for the castle: pRook, Colour, no moves
-                    if (Piece (Board [(From.x + To->x) / 2][From.y]) != pEmpty)   // passing square must be empty
+                    if (Piece (Board [(From.x + To.x) / 2][From.y]) != pEmpty)   // passing square must be empty
                       Bad = true;
                     else
-                      if (*Index == 0)   // Kingside castle
+                      if (Index == 0)   // Kingside castle
                         {
-                          if (Board [7][To->y] != pr)
+                          if (Board [7][To.y] != pr)
                             Bad = true;
                         }
-                      else   // *Index == 1   Queenside castle
-                        if (Board [0][To->y] != pr)
+                      else   // Index == 1   Queenside castle
+                        if (Board [0][To.y] != pr)
                           Bad = true;
-                        else if (Board [1][To->y] != pEmpty)
+                        else if (Board [1][To.y] != pEmpty)
                           Bad = true;
                   }
           }
-        if (Repeat)
-          if (Bad)   // no good, try next option
-            {
-              (*Index)++;
-              *To = From;
-            }
-          else
-            return true;
-        else   // mSingle | mPawn: only 1 step each direction
+        if (Bad)   // no good, try next option
           {
-            (*Index)++;
-            if (!Bad)   // OK
-              return true;
+            Index++;
+            To = From;
+          }
+        else
+          {
+            *Res = To;
+            Res++;
+            if (!Repeat || PieceTaken)
+              {
+                Index++;
+                To = From;
+              }
           }
       }
+    Res->x = -1;
+    Res->y = -1;
   }
 
 
@@ -206,8 +206,8 @@ int PieceValue [] = {0,      10000000, 8800,   5100,  3330,    3200,    1000};
 
 int BoardScore (bool PlayWhite)
   {
-    _Coord p1, p2;
-    int Index;
+    _Coord p1;
+    _Coord Moves [64], *m;
     _Piece p, p_;
     int ds;
     int Score;
@@ -223,14 +223,15 @@ int BoardScore (bool PlayWhite)
               if (!SimpleAnalysis)
                 {
                   // Add 1 for every available move
-                  p2 = p1;
-                  Index = 0;
-                  while (PieceMove (p1, &p2, &Index))
+                  GetPieceMoves (p1, Moves);
+                  m = Moves;
+                  while (m->x >= 0)
                     {
                       ds++;
-                      p_ = Piece (Board [p2.x][p2.y]);
+                      p_ = Piece (Board [m->x][m->y]);
                       if (p_ != pEmpty)   // Add Piece Value / 10 that you can attack
                         ds += Min (PieceValue [p_], PieceValue [pQueen]) / 10;
+                      m++;
                     }
                 }
               if (PieceWhite (p) == PlayWhite)
@@ -323,10 +324,10 @@ _Coord BestA [DepthMax], BestB [DepthMax];
 
 int BestMove (bool PlayWhite, int Depth)
   {
+    _Coord Moves [64], *m;
     _Piece p, p_;
-    _Coord From, To;
+    _Coord From;
     _SpecialMove sm;
-    int Index;
     int Score;
     int BestScore;
     //
@@ -338,15 +339,15 @@ int BestMove (bool PlayWhite, int Depth)
           p = (_Piece) Board [From.x][From.y];
           if ((Piece (p) != pEmpty) && (PieceWhite (p) == PlayWhite))   // if my piece
             {
-              To = From;
-              Index = 0;
-              while (PieceMove (From, &To, &Index))   // for all moves
+              GetPieceMoves (From, Moves);
+              m = Moves;
+              while (m->x >= 0)   // for all moves
                 {
                   MovesConsidered++;
-                  p_ = (_Piece) Board [To.x][To.y];   // piece being taken (or Empty)
+                  p_ = (_Piece) Board [m->x][m->y];   // piece being taken (or Empty)
                   if (Piece (p_) == pKing)   // This would end in victory
                     return MAXINT;   // so stop here report a win
-                  sm = MovePiece (From, To);
+                  sm = MovePiece (From, *m);
                   if (Depth == DepthPlay)   // Reached the limit of look-ahead
                     Score = BoardScore (PlayWhite);   // evaluate move
                   else   // otherwise find the reply move
@@ -355,7 +356,7 @@ int BestMove (bool PlayWhite, int Depth)
                     {
                       BestScore = Score;
                       BestA [Depth] = From;
-                      BestB [Depth] = To;
+                      BestB [Depth] = *m;
                       /*for (Index = Depth; Index < SIZEARRAY (BestA); Index++)
                         {
                           BestA_ [Index] = BestA [Index];
@@ -367,7 +368,8 @@ int BestMove (bool PlayWhite, int Depth)
                           memcpy (BestB_, BestB, sizeof (BestB_));
                         }*/
                     }
-                  UnmovePiece (From, To, p_, sm);
+                  UnmovePiece (From, *m, p_, sm);
+                  m++;
                 }   // no more moves
             }
         }   // no more pieces
@@ -383,27 +385,28 @@ int BestMove (bool PlayWhite, int Depth)
 bool MoveValid (_Coord From, _Coord To)
   {
     _Piece p;
-    _Coord Pos;
-    int Index;
+    _Coord Moves [64], *m;
     //
     p = (_Piece) Board [From.x][From.y];
     if (Piece (p) != pEmpty)
       if (PieceWhite (p) == PlayerWhite)
         {
-          Pos = From;
-          Index = 0;
-          while (PieceMove (From, &Pos, &Index))
-            if ((Pos.x == To.x) && (Pos.y == To.y))   // destination found
-              return true;
+          GetPieceMoves (From, Moves);
+          m = Moves;
+          while (m->x >= 0)
+            {
+              if ((m->x == To.x) && (m->y == To.y))   // destination found
+                return true;
+              m++;
+            }
         }
     return false;
   }
 
 bool InCheck (bool PlayWhite)
   {
-    _Coord From, To;
+    _Coord From, Moves [64], *m;
     _Piece p;
-    int Index;
     //
     for (From.y = 0; From.y < 8; From.y++)   // for every square
       for (From.x = 0; From.x < 8; From.x++)
@@ -411,14 +414,17 @@ bool InCheck (bool PlayWhite)
           p = (_Piece) Board [From.x][From.y];
           if ((Piece (p) != pEmpty) && (PieceWhite (p) != PlayWhite))   // if not my piece
             {
-              To = From;
-              Index = 0;
-              while (PieceMove (From, &To, &Index))   // for all moves
-                if (Piece (Board [To.x][To.y]) == pKing)   // and it can take my king
-                  {
-                    Board [To.x][To.y] |= pChecked;
-                    return true;
-                  }
+              GetPieceMoves (From, Moves);
+              m = Moves;
+              while (m->x >= 0)   // for all moves
+                {
+                  if (Piece (Board [m->x][m->y]) == pKing)   // and it can take my king
+                    {
+                      Board [m->x][m->y] |= pChecked;
+                      return true;
+                    }
+                  m++;
+                }
             }
         }
       return false;

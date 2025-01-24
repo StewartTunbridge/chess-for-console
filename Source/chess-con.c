@@ -35,7 +35,7 @@
 
 
 const char AppName [] = "Chess for Console";
-const char Revision [] = "1.00";
+const char Revision [] = "1.01";
 
 #ifdef _Windows
   #include "..\Lib\Lib.c"
@@ -92,6 +92,10 @@ char *PieceSymbol [] = {"  ", "Ki", "Qu", "Ro", "Bi", "Kn", "p"}; //" KQRBKp";
 _Coord Highlight = {-1, -1};
 char Bodies [2] [64] = {"  ", "  "};
 
+bool Cheat = false;
+int MoveCount;
+bool GameOver = false;
+
 void ShowPieceTaken (_Piece p)
   {
     if (Piece (p) != pEmpty)
@@ -110,9 +114,6 @@ void ShowPieceTaken (_Piece p)
           }
       }
   }
-
-bool Cheat = false;
-int MoveCount;
 
 void ShowHelp ()
   {
