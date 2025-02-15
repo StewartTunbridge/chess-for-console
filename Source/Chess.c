@@ -4,7 +4,7 @@
 //
 // Author: Stewart Tunbridge, Pi Micros
 // Email:  stewarttunbridge@gmail.com
-// Copyright (c) 2024 Stewart Tunbridge, Pi Micros
+// Copyright (c) 2024, 2025 Stewart Tunbridge, Pi Micros
 //
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -13,24 +13,24 @@ typedef struct
     int x, y;
   } _Coord;
 
-typedef enum {pEmpty, pKing, pQueen, pRook, pBishop, pKnight, pPawn, pWhite = 0x0008, pChecked = 0x0010, pMoves = 0x100} _Piece;
-  // Bits 0-2 specify piece, Bit 3 specifies colour, Bit 4 goes true when in check (King only), Bits 8-- Counts the moves the piece has had
-  // Everything past bit 3 is purely for legal castling.
+typedef enum {pEmpty, pKing, pQueen, pRook, pBishop, pKnight, pPawn, pWhite = 0x08, pChecked = 0x10, pPawn2 = 0x20, pMoveID = 0x100} _Piece;
+  // Bits 0-2 specifies piece, Bit 3 => piece white, Bit 4 => has been in check (King only), Bit 5 => double move (Pawn only)
+  // Bits 8..31 Move ID: 0 => never moved.  (needed for castling & en passant
 
-typedef int _Board [8][8] ;   // Board [x][y]
-
-_Board Board;
-//_Piece Board [8][8];
-
-bool SimpleAnalysis = false;
-
-#define DepthMax 10
-
-#define Piece(p)       (_Piece)(p&(pWhite-1))
-#define PieceWhite(p)  ((p&pWhite)!=0)
+typedef _Piece _Board [8][8] ;   // Board [x][y]
+_Board Board;   // This is THE BOARD
+int MoveID;   // ID incremented every move
 
 bool PlayerWhite;
 int DepthPlay = 3;
+bool SimpleAnalysis = false;
+int Randomize = 0;
+
+#define DepthMax 10
+
+#define Piece(p)       (_Piece) (p & (pWhite-1))
+#define PieceWhite(p)  ((p&pWhite) != 0)
+#define PieceFrom(BasePiece,White) (_Piece)(White ? (BasePiece | pWhite) : BasePiece)
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -44,18 +44,20 @@ void BoardInit ()
   {
     int x, y;
     //
+    MoveID = 0;
     for (y = 0; y < 8; y++)
       for (x = 0; x < 8; x++)
         if (y == 0)
-          Board [x][y] = BoardStart [x] | pWhite;
+          Board [x][y] = PieceFrom (BoardStart [x], true);
         else if (y == 1)
-          Board [x][y] = pPawn | pWhite;
+          Board [x][y] = PieceFrom (pPawn, true);
         else if (y == 6)
           Board [x][y] = pPawn;
         else if (y == 7)
           Board [x][y] = BoardStart [x];
         else
           Board [x][y] = pEmpty;
+    srand (time (NULL));   // Initialize random number generator
   }
 
 
@@ -90,14 +92,13 @@ int FirstY [] = {7, 0};
 void GetPieceMoves (_Coord From, _Coord *Res)   // Res: array of _Coord
   {
     int Index;
-    _Piece FromPce, ToPce;
+    _Piece FromPce, ToPce, p_;
     _Coord *Moves;
     _Coord To;
     bool Repeat;
-    _Piece pr;
     bool Bad, PieceTaken;
     //
-    FromPce = (_Piece) Board [From.x][From.y];
+    FromPce = Board [From.x][From.y];
     Moves = PieceMoves [Piece (FromPce)];
     Repeat = PieceMovesRepeat [Piece (FromPce)];
     Index = 0;
@@ -141,29 +142,34 @@ void GetPieceMoves (_Coord From, _Coord *Res)   // Res: array of _Coord
                             Bad = true;
                           break;
                   case 2: // diagonal attacks
-                  case 3:
+                  case 3: //
                           if (Piece (ToPce) == pEmpty)
-                            Bad = true;
+                            {
+                              p_ = Board [To.x][From.y];   // piece you moved behind -
+                              if ( (Piece (p_) != pPawn) ||   // - not opponents pawn
+                                   (PieceWhite (p_) == PieceWhite (FromPce)) ||
+                                   ((p_ & pPawn2) == 0) ||   // - not there by double move
+                                   (p_ / pMoveID != MoveID / pMoveID) )   // - not the last move
+                                Bad = true;   // not en passan
+                            }
                 }
             else if (Piece (FromPce) == pKing)
               if (Index < 2)   // Castling
-                if ((FromPce / pMoves > 0) || (FromPce & pChecked))   // moved
+                if ((FromPce / pMoveID > 0) || (FromPce & pChecked))   // moved OR been in check?
                   Bad = true;
                 else
                   {
-                    pr = pRook;
-                    if (PieceWhite (FromPce))
-                      pr = (_Piece) (pr | pWhite);   // corresponding Rook for the castle: pRook, Colour, no moves
+                    p_ = PieceFrom (pRook, PieceWhite (FromPce));   // corresponding Rook for the castle: pRook, Colour, no moves
                     if (Piece (Board [(From.x + To.x) / 2][From.y]) != pEmpty)   // passing square must be empty
                       Bad = true;
                     else
                       if (Index == 0)   // Kingside castle
                         {
-                          if (Board [7][To.y] != pr)
+                          if (Board [7][To.y] != p_)
                             Bad = true;
                         }
                       else   // Index == 1   Queenside castle
-                        if (Board [0][To.y] != pr)
+                        if (Board [0][To.y] != p_)
                           Bad = true;
                         else if (Board [1][To.y] != pEmpty)
                           Bad = true;
@@ -227,10 +233,10 @@ int BoardScore (bool PlayWhite)
                   m = Moves;
                   while (m->x >= 0)
                     {
-                      ds++;
+                      ds += 100; //a move = 1/10 of a pawn   (was ds++)
                       p_ = Piece (Board [m->x][m->y]);
                       if (p_ != pEmpty)   // Add Piece Value / 10 that you can attack
-                        ds += Min (PieceValue [p_], PieceValue [pQueen]) / 10;
+                        ds += Min (PieceValue [p_], PieceValue [pQueen]) / 4;  // was / 10
                       m++;
                     }
                 }
@@ -240,6 +246,8 @@ int BoardScore (bool PlayWhite)
                 Score -= ds;
             }
         }
+    if (Randomize)
+      Score += rand () % (Randomize + Randomize + 1) - Randomize;
     return Score;
   }
 
@@ -250,60 +258,72 @@ int BoardScore (bool PlayWhite)
 //
 // Returns Score of best move
 
-typedef enum {smNone, smCrown, smCastle} _SpecialMove;
+typedef enum {smNone, smCrown, smCastle, smEnPassant} _SpecialMove;
 
 int LastRow [] = {0, 7};
+int PawnSkipRow [] = {5, 2};   // Row missed when pawns start with a double
 
 // Move a piece allowing for special moves
 
 _SpecialMove MovePiece (_Coord From, _Coord To)
   {
-    int p;
+    _SpecialMove Res;
+    _Piece Pce;
     //
-    p = Board [From.x][From.y] + pMoves;   // tag piece as moved
+    Res = smNone;
+    MoveID += pMoveID;   // Next ID
+    Pce = (_Piece) ((Board [From.x][From.y] & (pMoveID - 1 - pPawn2)) | MoveID);   // Set new MoveID and clear Pawn double move flag
     Board [From.x][From.y] = pEmpty;
-    Board [To.x][To.y] = p;
-    // Check for pawn reaching the far end of the board
-    if (Piece (p) == pPawn)
+    // Pawn special moves
+    if (Piece (Pce) == pPawn)
       {
-        if (To.y == LastRow [PieceWhite (p)])   // Last row reached
+        // Check for double first move
+        if (Abs (From.y - To.y) > 1)
+          Pce = (_Piece) (Pce | pPawn2);   // set Pawn double move flag
+        // Check for pawn reaching the far end of the board
+        if (To.y == LastRow [PieceWhite (Pce)])   // Last row reached
           {
-            Board [To.x][To.y] = p - pPawn + pQueen;
-            return smCrown;
+            Pce = (_Piece) (Pce - pPawn + pQueen);   // upgradde from Pawn to Queen
+            Res = smCrown;
           }
+        // Check for en passan
+        else if (To.y == PawnSkipRow [!PieceWhite (Pce)])   // Up to skip row of opponent
+          if (From.x != To.x)   // diagonal move
+            if (Piece (Board [To.x][To.y]) == pEmpty)   // to an empty square. EN PASSANT
+              {
+                Board [To.x][From.y] = pEmpty;   // take piece (pawn) behind
+                Res = smEnPassant;
+              }
       }
     // Check for Castling
-    else if (Piece (p) == pKing)
+    else if (Piece (Pce) == pKing)
       {
         if (To.x == From.x + 2)   // kingside castle
           {
             Board [5][To.y] = Board [7][To.y];   // jump Rook
             Board [7][To.y] = pEmpty;
-            return smCastle;
+            Res = smCastle;
           }
-        if (To.x == From.x - 2)   // queenside castle
+        else if (To.x == From.x - 2)   // queenside castle
           {
             Board [3][To.y] = Board [0][To.y];   // jump Rook
             Board [0][To.y] = pEmpty;
-            return smCastle;
+            Res = smCastle;
           }
       }
-    return smNone;
+    Board [To.x][To.y] = Pce;
+    return Res;
   }
 
 // undo the above
 
-void UnmovePiece (_Coord From, _Coord To, _Piece OldTo, _SpecialMove SpecialMove)
+void UnmovePiece (_Coord From, _Coord To, _Piece OldFrom, _Piece OldTo, _SpecialMove SpecialMove)
   {
-    int p;
-    // move back
-    p = Board [To.x][To.y] - pMoves;
-    Board [From.x][From.y] = p;
+    Board [From.x][From.y] = OldFrom;
     Board [To.x][To.y] = OldTo;
     // Special moves
-    if (SpecialMove == smCrown)   // uncrown
-      Board [From.x][From.y] = p - pQueen + pPawn;
-    else if (SpecialMove == smCastle)   // return Rook
+    MoveID -= pMoveID;   // Next ID
+    if (SpecialMove == smCastle)   // return Rook
       {
         if (To.x == 6)   // kingside castle
           {
@@ -316,6 +336,8 @@ void UnmovePiece (_Coord From, _Coord To, _Piece OldTo, _SpecialMove SpecialMove
             Board [3][To.y] = pEmpty;
           }
       }
+    else if (SpecialMove == smEnPassant)   // reinstate opponents pawn with the flags it would have had
+      Board [To.x][From.y] = (_Piece) (PieceFrom (pPawn, !PieceWhite (OldFrom)) | pPawn2 | MoveID);
   }
 
 longint MovesConsidered;
@@ -336,7 +358,7 @@ int BestMove (bool PlayWhite, int Depth)
     for (From.y = 0; From.y < 8; From.y++)   // for every square
       for (From.x = 0; From.x < 8; From.x++)
         {
-          p = (_Piece) Board [From.x][From.y];
+          p = Board [From.x][From.y];
           if ((Piece (p) != pEmpty) && (PieceWhite (p) == PlayWhite))   // if my piece
             {
               GetPieceMoves (From, Moves);
@@ -368,7 +390,7 @@ int BestMove (bool PlayWhite, int Depth)
                           memcpy (BestB_, BestB, sizeof (BestB_));
                         }*/
                     }
-                  UnmovePiece (From, *m, p_, sm);
+                  UnmovePiece (From, *m, p, p_, sm);
                   m++;
                 }   // no more moves
             }
@@ -406,7 +428,7 @@ bool MoveValid (_Coord From, _Coord To)
 bool InCheck (bool PlayWhite)
   {
     _Coord From, Moves [64], *m;
-    _Piece p;
+    _Piece p, p_;
     //
     for (From.y = 0; From.y < 8; From.y++)   // for every square
       for (From.x = 0; From.x < 8; From.x++)
@@ -418,14 +440,15 @@ bool InCheck (bool PlayWhite)
               m = Moves;
               while (m->x >= 0)   // for all moves
                 {
-                  if (Piece (Board [m->x][m->y]) == pKing)   // and it can take my king
+                  p_ = Board [m->x][m->y];
+                  if (Piece (p_) == pKing)   // and it can take my king
                     {
-                      Board [m->x][m->y] |= pChecked;
+                      Board [m->x][m->y] = (_Piece) (p_ | pChecked);
                       return true;
                     }
                   m++;
                 }
             }
         }
-      return false;
+    return false;
   }
