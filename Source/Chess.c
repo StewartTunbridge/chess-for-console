@@ -14,23 +14,36 @@ typedef struct
   } _Coord;
 
 typedef enum {pEmpty, pKing, pQueen, pRook, pBishop, pKnight, pPawn, pWhite = 0x08, pChecked = 0x10, pPawn2 = 0x20, pMoveID = 0x100} _Piece;
-  // Bits 0-2 specifies piece, Bit 3 => piece white, Bit 4 => has been in check (King only), Bit 5 => double move (Pawn only)
+  // Bits 0-2 specifies piece, Bit 3 => piece white, Bit 4 =>King in Check, Bit 5 => double move (Pawn only)
   // Bits 8..31 Move ID: 0 => never moved.  (needed for castling & en passant
 
 typedef _Piece _Board [8][8] ;   // Board [x][y]
 _Board Board;   // This is THE BOARD
 int MoveID;   // ID incremented every move
+_Coord MoveForbidenFrom = {-1, -1};
+_Coord MoveForbidenTo = {-1, -1};
 
 bool PlayerWhite;
+
+typedef enum {aPiecesOnly, aMoves, aExtend, aDefend} _Analysis;
+
 int DepthPlay = 3;
-bool SimpleAnalysis = false;
+
+_Analysis Analysis = aMoves;
+int AnalysisScorePiece = 1000;   // Value of a Pawn
+int AnalysisScoreMove = 10;
+int AnalysisScoreAttack = 25;   // * Piece Value / 1000
+int AnalysisScoreAttackInd = 10;   // "
+
 int Randomize = 0;
 
 #define DepthMax 10
 
 #define Piece(p)       (_Piece) (p & (pWhite-1))
 #define PieceWhite(p)  ((p&pWhite) != 0)
-#define PieceFrom(BasePiece,White) (_Piece)(White ? (BasePiece | pWhite) : BasePiece)
+#define PieceFrom(BasePiece,White) ((_Piece)(White ? (BasePiece | pWhite) : BasePiece))
+
+bool InCheck (bool PlayWhite);
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -89,7 +102,7 @@ _Coord *PieceMoves [] =    {NULL,   PieceMovesKing, PieceMovesAllDir, PieceMoves
 int PawnFirstY [] = {6, 1};
 int FirstY [] = {7, 0};
 
-void GetPieceMoves (_Coord From, _Coord *Res)   // Res: array of _Coord
+void GetPieceMoves (_Coord From, _Coord *Res, _Analysis Analysis = aMoves)   // Analysis set for BoardScore
   {
     int Index;
     _Piece FromPce, ToPce, p_;
@@ -97,6 +110,7 @@ void GetPieceMoves (_Coord From, _Coord *Res)   // Res: array of _Coord
     _Coord To;
     bool Repeat;
     bool Bad, PieceTaken;
+    bool NextDir;
     //
     FromPce = Board [From.x][From.y];
     Moves = PieceMoves [Piece (FromPce)];
@@ -119,11 +133,13 @@ void GetPieceMoves (_Coord From, _Coord *Res)   // Res: array of _Coord
         PieceTaken = false;
         if ((To.x > 7) || (To.x < 0) || (To.y > 7) || (To.y < 0))   // off the board
           Bad = true;
+        else if (From.x == MoveForbidenFrom.x && From.y == MoveForbidenFrom.y && To.x == MoveForbidenTo.x && To.y == MoveForbidenTo.y)
+          Bad = true;
         else
           {
             ToPce = (_Piece) Board [To.x][To.y];
             if (Piece (ToPce) != pEmpty)   // destination  NOT empty AND is
-              if (PieceWhite (ToPce) == PieceWhite (FromPce))   // my own piece
+              if (PieceWhite (ToPce) == PieceWhite (FromPce) && (Analysis != aDefend))   // my own colour
                 Bad = true;
               else
                 PieceTaken = true;   // takes oponents piece
@@ -145,11 +161,11 @@ void GetPieceMoves (_Coord From, _Coord *Res)   // Res: array of _Coord
                   case 3: //
                           if (Piece (ToPce) == pEmpty)
                             {
-                              p_ = Board [To.x][From.y];   // piece you moved behind -
+                              p_ = Board [To.x][From.y];   // piece you moved behind
                               if ( (Piece (p_) != pPawn) ||   // - not opponents pawn
                                    (PieceWhite (p_) == PieceWhite (FromPce)) ||
                                    ((p_ & pPawn2) == 0) ||   // - not there by double move
-                                   (p_ / pMoveID != MoveID / pMoveID) )   // - not the last move
+                                   (p_ / pMoveID != MoveID) )   // - not the last move
                                 Bad = true;   // not en passan
                             }
                 }
@@ -184,7 +200,20 @@ void GetPieceMoves (_Coord From, _Coord *Res)   // Res: array of _Coord
           {
             *Res = To;
             Res++;
-            if (!Repeat || PieceTaken)
+            NextDir = true;
+            if (Repeat)
+              {
+                NextDir = false;
+                if (PieceTaken)
+                  {
+                    NextDir = true;
+                    if (Analysis == aExtend)
+                      if (PieceWhite (FromPce) != PieceWhite (ToPce))
+                        NextDir = false;
+                  }
+              }
+            //if (!Repeat || PieceTaken)
+            if (NextDir)
               {
                 Index++;
                 To = From;
@@ -203,20 +232,26 @@ void GetPieceMoves (_Coord From, _Coord *Res)   // Res: array of _Coord
 // 0 => Equal position both sides
 // BoardScore (Player) = - BoardScore (!Player)
 
-#define MAXINT (((unsigned int) -1)>>1)
+#define MAXINT (int)(((unsigned int) -1)>>1)
 #define MININT (-MAXINT)   // I know this is rong, but it prevents overflow when negating. Was (~MAXINT)
 
-int PieceValue [] = {0,      10000000, 8800,   5100,  3330,    3200,    1000};
-//                   pEmpty, pKing,    pQueen, pRook, pBishop, pKnight, pPawn
+#define iSqr(i) ((i)*(i))
+
+//int BoardScoreWhite = 0;
+
+int PieceValue [] = {0,      100000, 8800,   5100,  3330,    3200,    1000};
+//                   pEmpty, pKing,  pQueen, pRook, pBishop, pKnight, pPawn
 //                   Hans Berliners system (based on experience and computer experiments):
 
-int BoardScore (bool PlayWhite)
+// Try scoring for checking your own pieces
+// Try taking turn into account
+//   Code for hitting the king %%%%
+
+/*int BoardScoreSimple (bool PlayWhite)
   {
     _Coord p1;
-    _Coord Moves [64], *m;
-    _Piece p, p_;
-    int ds;
-    int Score;
+    int Score, ds;
+    _Piece p;
     //
     Score = 0;
     for (p1.y = 0; p1.y < 8; p1.y++)
@@ -226,17 +261,80 @@ int BoardScore (bool PlayWhite)
           if (Piece (p) != pEmpty)
             {
               ds = PieceValue [Piece (p)];   // Score piece value
-              if (!SimpleAnalysis)
+              if (PieceWhite (p) == PlayWhite)
+                Score += ds;
+              else
+                Score -= ds;
+            }
+        }
+      return Score;
+  }
+
+void BoardScoreWhiteCheck (bool Move) //####%%%%
+  {
+    int s;
+    //
+    s = BoardScoreSimple ();
+    if (s != BoardScoreWhite)
+      if (Move)
+        DebugAddP ("******* BOARD SCORE ERROR MOVE", {s, BoardScoreWhite});
+      else
+        DebugAddP ("******* BOARD SCORE ERROR UNMOVE", {s, BoardScoreWhite});
+    BoardScoreWhite = s;
+  }*/
+
+int BoardScore (bool PlayWhite)
+  {
+    int Score;
+    _Coord p1;
+    _Piece p, p_;
+    _Coord Moves [64], *m;
+    int ds;
+    int d, d_;
+    int pVal;
+    bool Direct;
+    //
+    /*if (Analysis == aPiecesOnly)
+      {
+        if (PlayWhite)
+          return BoardScoreWhite;
+        return -BoardScoreWhite;
+      }*/
+    Score = 0;
+    for (p1.y = 0; p1.y < 8; p1.y++)
+      for (p1.x = 0; p1.x < 8; p1.x++)
+        {
+          p = (_Piece) Board [p1.x][p1.y];
+          if (Piece (p) != pEmpty)
+            {
+              ds = PieceValue [Piece (p)];   // Score piece value
+              if (Analysis > aPiecesOnly)
                 {
-                  // Add 1 for every available move
-                  GetPieceMoves (p1, Moves);
+                  // Add points for every available move
+                  GetPieceMoves (p1, Moves, Analysis);
                   m = Moves;
+                  d = MAXINT;
                   while (m->x >= 0)
                     {
-                      ds += 100; //a move = 1/10 of a pawn   (was ds++)
+                      d_ = Abs (m->x - p1.x) + Abs (m->y - p1.y);
+                      if (d_ <= d)
+                        Direct = true;
+                      d = d_;
                       p_ = Piece (Board [m->x][m->y]);
-                      if (p_ != pEmpty)   // Add Piece Value / 10 that you can attack
-                        ds += Min (PieceValue [p_], PieceValue [pQueen]) / 4;  // was / 10
+                      if (Direct)
+                        ds += AnalysisScoreMove;   // Score for each available move into a new square
+                      if (p_ != pEmpty)   // Add points for every Piece that you can attack/defend
+                        {
+                          pVal = PieceValue [p_];
+                          //pVal = Min (pVal, 4 * PieceValue [pQueen]);
+                          pVal = pVal * AnalysisScorePiece / 1000;
+                          if (Direct)
+                            ds += pVal * AnalysisScoreAttack / 1000;   // Direct attack
+                          else
+                            ds += pVal * AnalysisScoreAttackInd / 1000;   // Blocked attack
+                          Direct = false;
+                          d = 0;
+                        }
                       m++;
                     }
                 }
@@ -268,12 +366,15 @@ int PawnSkipRow [] = {5, 2};   // Row missed when pawns start with a double
 _SpecialMove MovePiece (_Coord From, _Coord To)
   {
     _SpecialMove Res;
-    _Piece Pce;
+    _Piece Pce, PceTaken;
+    //int MoveValue;
     //
     Res = smNone;
-    MoveID += pMoveID;   // Next ID
-    Pce = (_Piece) ((Board [From.x][From.y] & (pMoveID - 1 - pPawn2)) | MoveID);   // Set new MoveID and clear Pawn double move flag
+    MoveID++;   // Next ID
+    Pce = (_Piece) ((Board [From.x][From.y] & (pMoveID - 1 - pPawn2)) | (MoveID * pMoveID));   // Set new MoveID and clear Pawn double move flag
     Board [From.x][From.y] = pEmpty;
+    PceTaken = (_Piece) Board [To.x][To.y];
+    //MoveValue = PieceValue [Piece (PceTaken)];
     // Pawn special moves
     if (Piece (Pce) == pPawn)
       {
@@ -283,16 +384,18 @@ _SpecialMove MovePiece (_Coord From, _Coord To)
         // Check for pawn reaching the far end of the board
         if (To.y == LastRow [PieceWhite (Pce)])   // Last row reached
           {
-            Pce = (_Piece) (Pce - pPawn + pQueen);   // upgradde from Pawn to Queen
             Res = smCrown;
+            Pce = (_Piece) (Pce - pPawn + pQueen);   // upgradde from Pawn to Queen
+            //MoveValue += PieceValue [pQueen] - PieceValue [pPawn];
           }
         // Check for en passan
         else if (To.y == PawnSkipRow [!PieceWhite (Pce)])   // Up to skip row of opponent
           if (From.x != To.x)   // diagonal move
-            if (Piece (Board [To.x][To.y]) == pEmpty)   // to an empty square. EN PASSANT
+            if (Piece (PceTaken) == pEmpty)   // to an empty square. EN PASSANT
               {
-                Board [To.x][From.y] = pEmpty;   // take piece (pawn) behind
                 Res = smEnPassant;
+                Board [To.x][From.y] = pEmpty;   // take piece (pawn) behind
+                //MoveValue = PieceValue [pPawn];
               }
       }
     // Check for Castling
@@ -300,18 +403,24 @@ _SpecialMove MovePiece (_Coord From, _Coord To)
       {
         if (To.x == From.x + 2)   // kingside castle
           {
+            Res = smCastle;
             Board [5][To.y] = Board [7][To.y];   // jump Rook
             Board [7][To.y] = pEmpty;
-            Res = smCastle;
           }
         else if (To.x == From.x - 2)   // queenside castle
           {
+            Res = smCastle;
             Board [3][To.y] = Board [0][To.y];   // jump Rook
             Board [0][To.y] = pEmpty;
-            Res = smCastle;
           }
       }
-    Board [To.x][To.y] = Pce;
+    Board [To.x][To.y] = Pce;   // Place the move
+    // Update board White value
+    /*if (PieceWhite (Pce))
+      BoardScoreWhite += MoveValue;
+    else
+      BoardScoreWhite -= MoveValue;*/
+    //BoardScoreWhiteCheck (true);//####
     return Res;
   }
 
@@ -319,10 +428,13 @@ _SpecialMove MovePiece (_Coord From, _Coord To)
 
 void UnmovePiece (_Coord From, _Coord To, _Piece OldFrom, _Piece OldTo, _SpecialMove SpecialMove)
   {
+    //int MoveValue;
+    //
     Board [From.x][From.y] = OldFrom;
     Board [To.x][To.y] = OldTo;
+    //MoveValue = PieceValue [Piece (OldTo)];
     // Special moves
-    MoveID -= pMoveID;   // Next ID
+    MoveID--;   // Next ID
     if (SpecialMove == smCastle)   // return Rook
       {
         if (To.x == 6)   // kingside castle
@@ -337,7 +449,18 @@ void UnmovePiece (_Coord From, _Coord To, _Piece OldFrom, _Piece OldTo, _Special
           }
       }
     else if (SpecialMove == smEnPassant)   // reinstate opponents pawn with the flags it would have had
-      Board [To.x][From.y] = (_Piece) (PieceFrom (pPawn, !PieceWhite (OldFrom)) | pPawn2 | MoveID);
+      {
+        Board [To.x][From.y] = (_Piece) (PieceFrom (pPawn, !PieceWhite (OldFrom)) | pPawn2 | (MoveID * pMoveID));
+        //MoveValue = PieceValue [pPawn];
+      }
+    //else if (SpecialMove == smCrown)
+      //MoveValue += PieceValue [pQueen] - PieceValue [pPawn];
+    // Update board White value. Enhanve for Castling & enpasson %%%%
+    /*if (PieceWhite (OldFrom))
+      BoardScoreWhite -= MoveValue;
+    else
+      BoardScoreWhite += MoveValue;*/
+    //BoardScoreWhiteCheck (false);//####
   }
 
 longint MovesConsidered;
@@ -352,6 +475,7 @@ int BestMove (bool PlayWhite, int Depth)
     _SpecialMove sm;
     int Score;
     int BestScore;
+    int MovesAvailable;
     //
     BestScore = MININT;
     // Go thru all my pieces and all their moves
@@ -366,35 +490,31 @@ int BestMove (bool PlayWhite, int Depth)
               while (m->x >= 0)   // for all moves
                 {
                   MovesConsidered++;
+                  MovesAvailable++;
                   p_ = (_Piece) Board [m->x][m->y];   // piece being taken (or Empty)
                   if (Piece (p_) == pKing)   // This would end in victory
-                    return MAXINT;   // so stop here report a win
+                    return MAXINT;   // so stop here report the winning move */
                   sm = MovePiece (From, *m);
                   if (Depth == DepthPlay)   // Reached the limit of look-ahead
                     Score = BoardScore (PlayWhite);   // evaluate move
                   else   // otherwise find the reply move
                     Score = -BestMove (!PlayWhite, Depth + 1);
-                  if (Score > BestScore)
+                  if (Score >= BestScore)
                     {
                       BestScore = Score;
                       BestA [Depth] = From;
                       BestB [Depth] = *m;
-                      /*for (Index = Depth; Index < SIZEARRAY (BestA); Index++)
-                        {
-                          BestA_ [Index] = BestA [Index];
-                          BestB_ [Index] = BestB [Index];
-                        }
-                     if (Depth == 0)
-                        {
-                          memcpy (BestA_, BestA, sizeof (BestA_));
-                          memcpy (BestB_, BestB, sizeof (BestB_));
-                        }*/
                     }
                   UnmovePiece (From, *m, p, p_, sm);
                   m++;
                 }   // no more moves
             }
         }   // no more pieces
+    if (BestScore == MININT)   // no moves available (without losing the king)
+      if (InCheck (PlayWhite))   // you are in checkmate
+        BestScore = MININT;
+      else   // Stale mate
+        BestScore = MAXINT;
     return BestScore;
   }
 
@@ -411,7 +531,7 @@ bool MoveValid (_Coord From, _Coord To)
     //
     p = (_Piece) Board [From.x][From.y];
     if (Piece (p) != pEmpty)
-      if (PieceWhite (p) == PlayerWhite)
+      //if (PieceWhite (p) == PlayerWhite)
         {
           GetPieceMoves (From, Moves);
           m = Moves;
@@ -424,6 +544,8 @@ bool MoveValid (_Coord From, _Coord To)
         }
     return false;
   }
+
+// Returns true if selected colour is in Check. Also sets / clears pChecked
 
 bool InCheck (bool PlayWhite)
   {
@@ -449,6 +571,14 @@ bool InCheck (bool PlayWhite)
                   m++;
                 }
             }
+        }
+    // Untag pChecked
+    for (From.y = 0; From.y < 8; From.y++)   // for every square
+      for (From.x = 0; From.x < 8; From.x++)
+        {
+          p_ = Board [From.x][From.y];
+          if (PieceWhite (p_) == PlayWhite)
+            Board [From.x][From.y] = (_Piece) (p_ & ~pChecked);
         }
     return false;
   }
